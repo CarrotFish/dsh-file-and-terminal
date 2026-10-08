@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-file-and-terminal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Host terminal and Explorer-style file manager panels for the DSH web profile",
   "type": "module",
   "main": "./index.js",
