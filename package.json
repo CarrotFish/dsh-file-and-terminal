@@ -1,0 +1,44 @@
+{
+  "name": "dsh-plugin-file-and-terminal",
+  "version": "0.1.0",
+  "description": "Host terminal and Explorer-style file manager panels for the DSH web profile",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["index.js", "explorer.js", "client.js", "client", "scripts", "cordis.patch.yml", "README.md"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "test": "node --test tests/*.test.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "@deepseek-ai/dsh-subprocess": "*",
+    "dsh-better-sidebar": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true },
+    "@deepseek-ai/dsh-subprocess": { "optional": true },
+    "dsh-better-sidebar": { "optional": true }
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0"
+  },
+  "license": "MIT"
+}

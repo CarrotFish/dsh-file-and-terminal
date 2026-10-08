@@ -1,0 +1,9 @@
+- insert:
+    - id: file-and-terminal
+      name: dsh-plugin-file-and-terminal
+      config:
+        # Explorer access is restricted to this directory and its descendants.
+        root: "~"
+        maxEntries: 1000
+        maxDownloadBytes: 67108864
+        maxUploadBytes: 67108864
