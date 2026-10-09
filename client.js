@@ -10312,15 +10312,176 @@ window.__ModuleLoader__.load({
     //#endregion
     //#region ../client/index.jsx
     const API = new URL("api/file-and-terminal", document.baseURI);
+    const TERMINAL_FONT_SIZE_KEY = "dsh-file-and-terminal:terminal-font-size";
+    const DEFAULT_TERMINAL_FONT_SIZE = 13;
+    const MIN_TERMINAL_FONT_SIZE = 8;
+    const MAX_TERMINAL_FONT_SIZE = 28;
+    const INDEPENDENT_SIDEBAR_SIZE_KEY = "dsh-file-and-terminal:sidebar-size";
+    const INDEPENDENT_SIDEBAR_STATE_KEY = "dsh-file-and-terminal:sidebar-tabs";
+    const DEFAULT_INDEPENDENT_SIDEBAR_SIZE = {
+    	right: 380,
+    	bottom: 320
+    };
     let explorerCache;
     let explorerRequest = 0;
     const explorerListeners = /* @__PURE__ */ new Set();
-    let fileManagerState = {
-    	downloading: /* @__PURE__ */ new Set(),
-    	downloadError: ""
-    };
+    let fileManagerState = { downloadError: "" };
     const fileManagerListeners = /* @__PURE__ */ new Set();
     let terminalRuntime;
+    let independentSidebarState;
+    let independentTerminalRuntime;
+    const independentSidebarListeners = /* @__PURE__ */ new Set();
+    function readIndependentSidebarSize() {
+    	try {
+    		const value = JSON.parse(window.localStorage.getItem(INDEPENDENT_SIDEBAR_SIZE_KEY) || "null");
+    		return {
+    			right: Number.isFinite(value?.right) ? Math.max(260, value.right) : DEFAULT_INDEPENDENT_SIDEBAR_SIZE.right,
+    			bottom: Number.isFinite(value?.bottom) ? Math.max(180, value.bottom) : DEFAULT_INDEPENDENT_SIDEBAR_SIZE.bottom
+    		};
+    	} catch {
+    		return { ...DEFAULT_INDEPENDENT_SIDEBAR_SIZE };
+    	}
+    }
+    function storeIndependentSidebarSize(size) {
+    	try {
+    		window.localStorage.setItem(INDEPENDENT_SIDEBAR_SIZE_KEY, JSON.stringify(size));
+    	} catch {}
+    }
+    function updateIndependentSidebar(state) {
+    	independentSidebarState = state;
+    	for (const listener of independentSidebarListeners) listener(state);
+    }
+    function readIndependentSidebarState() {
+    	try {
+    		const value = JSON.parse(window.localStorage.getItem(INDEPENDENT_SIDEBAR_STATE_KEY) || "null");
+    		if (!Array.isArray(value?.tabs)) return {
+    			tabs: [],
+    			activeTab: null,
+    			target: "right"
+    		};
+    		const tabs = value.tabs.filter((tab) => tab && typeof tab.id === "string" && typeof tab.title === "string" && [
+    			"files",
+    			"terminal",
+    			"preview"
+    		].includes(tab.kind) && (tab.kind !== "preview" || typeof tab.path === "string"));
+    		return {
+    			tabs,
+    			activeTab: tabs.some((tab) => tab.id === value.activeTab) ? value.activeTab : tabs[0]?.id ?? null,
+    			target: value.target === "bottom" ? "bottom" : "right"
+    		};
+    	} catch {
+    		return {
+    			tabs: [],
+    			activeTab: null,
+    			target: "right"
+    		};
+    	}
+    }
+    function saveIndependentSidebarState(state) {
+    	try {
+    		window.localStorage.setItem(INDEPENDENT_SIDEBAR_STATE_KEY, JSON.stringify({
+    			tabs: state.tabs,
+    			activeTab: state.activeTab,
+    			target: state.target
+    		}));
+    	} catch {}
+    }
+    function openIndependentSidebar(target) {
+    	const next = {
+    		...independentSidebarState ?? readIndependentSidebarState(),
+    		target,
+    		activeTab: null
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function openIndependentSidebarTab(target, tab) {
+    	const state = independentSidebarState ?? readIndependentSidebarState();
+    	const existing = state.tabs.find((candidate) => candidate.kind === tab.kind && (tab.kind !== "preview" || candidate.path === tab.path));
+    	const nextTab = existing ?? {
+    		...tab,
+    		id: tab.kind === "preview" ? `preview:${tab.path}` : tab.kind
+    	};
+    	const tabs = existing ? state.tabs : [...state.tabs, nextTab];
+    	const next = {
+    		...state,
+    		target,
+    		tabs,
+    		activeTab: nextTab.id
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function moveIndependentSidebar(target) {
+    	if (!independentSidebarState) return;
+    	const next = {
+    		...independentSidebarState,
+    		target
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function activateIndependentSidebarTab(tabId) {
+    	if (!independentSidebarState) return;
+    	const next = {
+    		...independentSidebarState,
+    		activeTab: tabId
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function reorderIndependentSidebarTab(tabId, beforeTabId) {
+    	if (!independentSidebarState || tabId === beforeTabId) return;
+    	const tabs = [...independentSidebarState.tabs];
+    	const from = tabs.findIndex((tab) => tab.id === tabId);
+    	const to = tabs.findIndex((tab) => tab.id === beforeTabId);
+    	if (from < 0 || to < 0) return;
+    	const [tab] = tabs.splice(from, 1);
+    	tabs.splice(from < to ? to - 1 : to, 0, tab);
+    	const next = {
+    		...independentSidebarState,
+    		tabs
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function closeIndependentSidebarTab(tabId) {
+    	if (!independentSidebarState) return;
+    	const index = independentSidebarState.tabs.findIndex((tab) => tab.id === tabId);
+    	if (index < 0) return;
+    	if (independentSidebarState.tabs[index].kind === "terminal") independentTerminalRuntime?.close();
+    	const tabs = independentSidebarState.tabs.filter((tab) => tab.id !== tabId);
+    	const activeTab = independentSidebarState.activeTab === tabId ? tabs[Math.min(index, tabs.length - 1)]?.id ?? null : independentSidebarState.activeTab;
+    	const next = {
+    		...independentSidebarState,
+    		tabs,
+    		activeTab
+    	};
+    	saveIndependentSidebarState(next);
+    	updateIndependentSidebar(next);
+    }
+    function useIndependentSidebar() {
+    	const [state, setState] = (0, react.useState)(independentSidebarState);
+    	(0, react.useEffect)(() => {
+    		independentSidebarListeners.add(setState);
+    		setState(independentSidebarState);
+    		return () => independentSidebarListeners.delete(setState);
+    	}, []);
+    	return state;
+    }
+    function readTerminalFontSize() {
+    	try {
+    		const value = Number(window.localStorage.getItem(TERMINAL_FONT_SIZE_KEY));
+    		return Number.isInteger(value) && value >= MIN_TERMINAL_FONT_SIZE && value <= MAX_TERMINAL_FONT_SIZE ? value : DEFAULT_TERMINAL_FONT_SIZE;
+    	} catch {
+    		return DEFAULT_TERMINAL_FONT_SIZE;
+    	}
+    }
+    function storeTerminalFontSize(value) {
+    	try {
+    		window.localStorage.setItem(TERMINAL_FONT_SIZE_KEY, String(value));
+    	} catch {}
+    }
     function endpoint(action, path) {
     	const url = new URL(API);
     	url.searchParams.set("action", action);
@@ -10390,9 +10551,9 @@ window.__ModuleLoader__.load({
     	}, []);
     	return state;
     }
-    function FileManager() {
+    function FileManager({ onOpenRightSidebar = () => {}, onOpenBottomSidebar = () => {}, onPreviewFile = () => {} }) {
     	const { state, load, reload } = useExplorer();
-    	const { downloading, downloadError } = useFileManagerState();
+    	const { downloadError } = useFileManagerState();
     	const fileInput = (0, react.useRef)(null);
     	const directoryInput = (0, react.useRef)(null);
     	const [uploading, setUploading] = (0, react.useState)(false);
@@ -10400,8 +10561,7 @@ window.__ModuleLoader__.load({
     	const download = async (item) => {
     		updateFileManagerState((current) => ({
     			...current,
-    			downloadError: "",
-    			downloading: new Set(current.downloading).add(item.path)
+    			downloadError: ""
     		}));
     		try {
     			const response = await fetch(endpoint("download", item.path), {
@@ -10426,15 +10586,6 @@ window.__ModuleLoader__.load({
     				...current,
     				downloadError: `${item.name}: ${error?.message ?? String(error)}`
     			}));
-    		} finally {
-    			updateFileManagerState((current) => {
-    				const next = new Set(current.downloading);
-    				next.downloading.delete(item.path);
-    				return {
-    					...current,
-    					downloading: next
-    				};
-    			});
     		}
     	};
     	const upload = async (selected) => {
@@ -10477,6 +10628,22 @@ window.__ModuleLoader__.load({
     					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
     						className: "fat-toolbar-actions",
     						children: [
+    							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+    								className: "fat-toolbar-button",
+    								type: "button",
+    								onClick: () => onOpenRightSidebar(state.root),
+    								"aria-label": "在右侧边栏打开文件管理",
+    								title: "在右侧边栏打开文件管理",
+    								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, { kind: "sidebar-right" }), "右侧栏"]
+    							}),
+    							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+    								className: "fat-toolbar-button",
+    								type: "button",
+    								onClick: () => onOpenBottomSidebar(state.root),
+    								"aria-label": "在底部面板打开文件管理",
+    								title: "在底部面板打开文件管理",
+    								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, { kind: "sidebar-bottom" }), "底部栏"]
+    							}),
     							/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
     								className: "fat-toolbar-button",
     								type: "button",
@@ -10563,12 +10730,13 @@ window.__ModuleLoader__.load({
     						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
     							className: "fat-download",
     							type: "button",
-    							disabled: downloading.has(item.path),
     							onClick: () => void download(item),
     							"aria-label": `打包下载 ${item.name}`,
-    							children: downloading.has(item.path) ? "打包中…" : "打包下载"
-    						})] }) : item.type === "file" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+    							children: "打包下载"
+    						})] }) : item.type === "file" ? /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
     							className: "fat-entry",
+    							type: "button",
+    							onClick: () => onPreviewFile(item),
     							children: [
     								/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, { kind: "file" }),
     								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: item.name }),
@@ -10577,10 +10745,9 @@ window.__ModuleLoader__.load({
     						}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
     							className: "fat-download",
     							type: "button",
-    							disabled: downloading.has(item.path),
     							onClick: () => void download(item),
     							"aria-label": `下载 ${item.name}`,
-    							children: downloading.has(item.path) ? "下载中…" : "下载"
+    							children: "下载"
     						})] }) : /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
     							className: "fat-entry fat-muted",
     							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
@@ -10603,6 +10770,200 @@ window.__ModuleLoader__.load({
     		]
     	});
     }
+    function previewFormat(name) {
+    	const extension = name.split(".").pop()?.toLowerCase() ?? "";
+    	if ([
+    		"png",
+    		"jpg",
+    		"jpeg",
+    		"gif",
+    		"webp",
+    		"avif",
+    		"svg",
+    		"bmp"
+    	].includes(extension)) return {
+    		kind: "image",
+    		mime: {
+    			jpg: "image/jpeg",
+    			jpeg: "image/jpeg",
+    			svg: "image/svg+xml"
+    		}[extension] ?? `image/${extension}`
+    	};
+    	if (extension === "pdf") return {
+    		kind: "pdf",
+    		mime: "application/pdf"
+    	};
+    	if ([
+    		"mp4",
+    		"webm",
+    		"mov"
+    	].includes(extension)) return {
+    		kind: "video",
+    		mime: extension === "mov" ? "video/quicktime" : `video/${extension}`
+    	};
+    	if ([
+    		"mp3",
+    		"wav",
+    		"ogg",
+    		"m4a",
+    		"flac"
+    	].includes(extension)) return {
+    		kind: "audio",
+    		mime: `audio/${extension}`
+    	};
+    	if ([
+    		"txt",
+    		"md",
+    		"markdown",
+    		"json",
+    		"jsonc",
+    		"js",
+    		"jsx",
+    		"ts",
+    		"tsx",
+    		"css",
+    		"scss",
+    		"html",
+    		"xml",
+    		"yaml",
+    		"yml",
+    		"toml",
+    		"sh",
+    		"bash",
+    		"py",
+    		"go",
+    		"rs",
+    		"java",
+    		"c",
+    		"h",
+    		"cpp",
+    		"hpp",
+    		"sql",
+    		"csv",
+    		"log",
+    		"ini",
+    		"conf",
+    		"env",
+    		"diff",
+    		"patch"
+    	].includes(extension)) return {
+    		kind: "text",
+    		mime: "text/plain"
+    	};
+    	return {
+    		kind: "unsupported",
+    		mime: "application/octet-stream"
+    	};
+    }
+    function FilePreviewTab({ file }) {
+    	const format = previewFormat(file.name);
+    	const [content, setContent] = (0, react.useState)({
+    		phase: format.kind === "unsupported" ? "unsupported" : "loading",
+    		text: "",
+    		url: "",
+    		error: ""
+    	});
+    	(0, react.useEffect)(() => {
+    		if (format.kind === "unsupported") return;
+    		let live = true;
+    		let objectUrl = "";
+    		setContent({
+    			phase: "loading",
+    			text: "",
+    			url: "",
+    			error: ""
+    		});
+    		fetch(endpoint("download", file.path), {
+    			credentials: "same-origin",
+    			cache: "no-store"
+    		}).then(async (response) => {
+    			if (!response.ok) {
+    				const body = await response.json().catch(() => void 0);
+    				throw new Error(body?.error || `${response.status} ${response.statusText}`);
+    			}
+    			const blob = await response.blob();
+    			if (format.kind === "text") return { text: await blob.text() };
+    			objectUrl = URL.createObjectURL(new Blob([blob], { type: format.mime }));
+    			return { url: objectUrl };
+    		}).then((result) => {
+    			if (live) setContent({
+    				phase: "ready",
+    				text: result.text ?? "",
+    				url: result.url ?? "",
+    				error: ""
+    			});
+    		}).catch((error) => {
+    			if (live) setContent({
+    				phase: "failed",
+    				text: "",
+    				url: "",
+    				error: error?.message ?? String(error)
+    			});
+    		});
+    		return () => {
+    			live = false;
+    			if (objectUrl) URL.revokeObjectURL(objectUrl);
+    		};
+    	}, [
+    		file.path,
+    		file.name,
+    		format.kind,
+    		format.mime
+    	]);
+    	if (content.phase === "loading") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    		className: "fat-preview-state",
+    		role: "status",
+    		children: [
+    			"正在预览 ",
+    			file.name,
+    			"…"
+    		]
+    	});
+    	if (content.phase === "failed") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    		className: "fat-preview-state fat-error",
+    		role: "alert",
+    		children: ["预览失败：", content.error]
+    	});
+    	if (content.phase === "unsupported") return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    		className: "fat-preview-state",
+    		children: ["此文件类型不支持预览。", /* @__PURE__ */ (0, react_jsx_runtime.jsx)("a", {
+    			href: endpoint("download", file.path).href,
+    			download: file.name,
+    			children: "下载文件"
+    		})]
+    	});
+    	if (format.kind === "text") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("pre", {
+    		className: "fat-preview-text",
+    		tabIndex: 0,
+    		children: content.text
+    	});
+    	if (format.kind === "image") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    		className: "fat-preview-media",
+    		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("img", {
+    			src: content.url,
+    			alt: file.name
+    		})
+    	});
+    	if (format.kind === "pdf") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("iframe", {
+    		className: "fat-preview-frame",
+    		src: content.url,
+    		title: file.name
+    	});
+    	if (format.kind === "video") return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    		className: "fat-preview-media",
+    		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("video", {
+    			src: content.url,
+    			controls: true
+    		})
+    	});
+    	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    		className: "fat-preview-media",
+    		children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("audio", {
+    			src: content.url,
+    			controls: true
+    		})
+    	});
+    }
     function ExplorerGlyph({ kind, size = 18 }) {
     	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("svg", {
     		"aria-hidden": "true",
@@ -10615,6 +10976,20 @@ window.__ModuleLoader__.load({
     		strokeLinecap: "round",
     		strokeLinejoin: "round",
     		children: [
+    			kind === "sidebar-right" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+    				x: "3",
+    				y: "4",
+    				width: "18",
+    				height: "16",
+    				rx: "2"
+    			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M15 4v16" })] }),
+    			kind === "sidebar-bottom" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("rect", {
+    				x: "3",
+    				y: "4",
+    				width: "18",
+    				height: "16",
+    				rx: "2"
+    			}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M3 14h18" })] }),
     			kind === "folder" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 20 18.5H4A1.5 1.5 0 0 1 2.5 17V8A1.5 1.5 0 0 1 4 6.5Z M2.8 10.5h18.4" }),
     			kind === "file" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M6 2.75h8l4 4V21a.75.75 0 0 1-.75.75h-11.5A.75.75 0 0 1 5 21V3.5a.75.75 0 0 1 .75-.75Z M14 2.75V7h4 M8 12h8 M8 16h8" }),
     			kind === "upload" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", { d: "M12 16V4m0 0 4 4m-4-4-4 4M5 14v5h14v-5" }),
@@ -10695,11 +11070,12 @@ window.__ModuleLoader__.load({
     	}).catch(() => {});
     }
     function createTerminalRuntime(host) {
+    	const fontSize = readTerminalFontSize();
     	const terminal = new Dl({
     		cursorBlink: true,
     		convertEol: true,
     		fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-    		fontSize: 13,
+    		fontSize,
     		scrollback: 1e4,
     		theme: {
     			background: "#111318",
@@ -10712,6 +11088,11 @@ window.__ModuleLoader__.load({
     	terminal.loadAddon(fit);
     	terminal.open(host);
     	fit.fit();
+    	terminal.buffer.onBufferChange((buffer) => {
+    		if (buffer.type !== "normal") return;
+    		terminal.scrollToBottom();
+    		terminal.refresh(0, terminal.rows - 1);
+    	});
     	const runtime = {
     		terminal,
     		fit,
@@ -10724,7 +11105,7 @@ window.__ModuleLoader__.load({
     		state: {
     			status: "正在启动宿主 Bash…",
     			error: "",
-    			fontSize: 13
+    			fontSize
     		},
     		closed: false
     	};
@@ -10739,7 +11120,9 @@ window.__ModuleLoader__.load({
     		terminal.dispose();
     		window.removeEventListener("pagehide", close);
     		if (terminalRuntime === runtime) terminalRuntime = void 0;
+    		if (independentTerminalRuntime === runtime) independentTerminalRuntime = void 0;
     	};
+    	runtime.close = close;
     	window.addEventListener("pagehide", close, { once: true });
     	terminal.onData((data) => {
     		if (!runtime.id || runtime.closed) return;
@@ -10787,20 +11170,21 @@ window.__ModuleLoader__.load({
     	})();
     	return runtime;
     }
-    function TerminalPanel({ visible = true, source = "main" }) {
+    function TerminalPanel({ visible = true, source = "main", onOpenRightSidebar = () => {}, onOpenBottomSidebar = () => {} }) {
     	const host = (0, react.useRef)(null);
     	const page = (0, react.useRef)(null);
     	const terminalRef = (0, react.useRef)(null);
     	const runtimeRef = (0, react.useRef)(null);
     	const resizeRef = (0, react.useRef)(() => {});
-    	const [fontSize, setFontSize] = (0, react.useState)(13);
+    	const [fontSize, setFontSize] = (0, react.useState)(readTerminalFontSize);
     	const [fullscreen, setFullscreen] = (0, react.useState)(false);
     	const [status, setStatus] = (0, react.useState)("正在启动宿主 Bash…");
     	const [error, setError] = (0, react.useState)("");
     	const adjustFontSize = (delta) => {
-    		const next = Math.max(8, Math.min(28, fontSize + delta));
+    		const next = Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, fontSize + delta));
     		if (next === fontSize) return;
     		setFontSize(next);
+    		storeTerminalFontSize(next);
     		if (terminalRef.current) terminalRef.current.options.fontSize = next;
     		if (runtimeRef.current) publishTerminalState(runtimeRef.current, { fontSize: next });
     		resizeRef.current();
@@ -10817,7 +11201,8 @@ window.__ModuleLoader__.load({
     		let observer;
     		let mounted = true;
     		const active = source === "main" || visible !== false;
-    		let runtime = terminalRuntime;
+    		const independent = source === "independent-sidebar";
+    		let runtime = independent ? independentTerminalRuntime : terminalRuntime;
     		if (!active && !runtime) {
     			setStatus("切换到终端标签以启动");
     			return () => {
@@ -10826,7 +11211,8 @@ window.__ModuleLoader__.load({
     		}
     		if (active && (!runtime || runtime.closed)) {
     			runtime = createTerminalRuntime(host.current);
-    			terminalRuntime = runtime;
+    			if (independent) independentTerminalRuntime = runtime;
+    			else terminalRuntime = runtime;
     		}
     		if (!runtime) return () => {
     			mounted = false;
@@ -10910,6 +11296,26 @@ window.__ModuleLoader__.load({
     					children: [
     						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
     							type: "button",
+    							title: "在右侧边栏打开终端",
+    							"aria-label": "在右侧边栏打开终端",
+    							onClick: () => onOpenRightSidebar(runtimeRef.current?.cwd ?? explorerCache?.root),
+    							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, {
+    								kind: "sidebar-right",
+    								size: 16
+    							})
+    						}),
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
+    							title: "在底部面板打开终端",
+    							"aria-label": "在底部面板打开终端",
+    							onClick: () => onOpenBottomSidebar(runtimeRef.current?.cwd ?? explorerCache?.root),
+    							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, {
+    								kind: "sidebar-bottom",
+    								size: 16
+    							})
+    						}),
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
     							title: "减小字体",
     							"aria-label": "减小终端字体",
     							disabled: fontSize <= 8,
@@ -10961,12 +11367,331 @@ window.__ModuleLoader__.load({
     		source: "sidebar"
     	});
     }
+    function AddSidebarTabPage({ onAdd }) {
+    	return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    		className: "fat-sidebar-add-page",
+    		children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    			className: "fat-sidebar-add-content",
+    			children: [
+    				/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, {
+    					kind: "sidebar-right",
+    					size: 24
+    				}),
+    				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h2", { children: "添加选项卡" }),
+    				/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", { children: "选择要在侧栏中打开的工具。" }),
+    				/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+    					type: "button",
+    					onClick: () => onAdd("files"),
+    					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, { kind: "folder" }), "文件管理"]
+    				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
+    					type: "button",
+    					onClick: () => onAdd("terminal"),
+    					children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+    						"aria-hidden": "true",
+    						children: "$_"
+    					}), "终端"]
+    				})] })
+    			]
+    		})
+    	});
+    }
+    function IndependentSidebarPanel() {
+    	const panel = useIndependentSidebar();
+    	const panelRef = (0, react.useRef)(null);
+    	const centerRef = (0, react.useRef)(null);
+    	const dragRef = (0, react.useRef)(null);
+    	const tabDragRef = (0, react.useRef)(null);
+    	const [size, setSize] = (0, react.useState)(readIndependentSidebarSize);
+    	const [showAddMenu, setShowAddMenu] = (0, react.useState)(false);
+    	(0, react.useLayoutEffect)(() => {
+    		const element = panelRef.current;
+    		const frame = (element?.closest("[data-shell-overlay]"))?.parentElement;
+    		const center = frame?.children[1];
+    		if (!panel || !element || !frame || !(center instanceof HTMLElement)) return;
+    		centerRef.current = center;
+    		const original = {
+    			marginRight: center.style.marginRight,
+    			marginBottom: center.style.marginBottom
+    		};
+    		center.setAttribute("data-fat-independent-push", "");
+    		const updateGeometry = () => {
+    			const frameRect = frame.getBoundingClientRect();
+    			const centerRect = center.getBoundingClientRect();
+    			if (panel.target === "bottom") {
+    				element.style.left = `${centerRect.left - frameRect.left}px`;
+    				element.style.right = `${frameRect.right - centerRect.right}px`;
+    				center.style.marginRight = original.marginRight;
+    				center.style.marginBottom = `${element.getBoundingClientRect().height}px`;
+    			} else {
+    				element.style.left = "";
+    				element.style.right = "0";
+    				center.style.marginRight = `${element.getBoundingClientRect().width}px`;
+    				center.style.marginBottom = original.marginBottom;
+    			}
+    		};
+    		updateGeometry();
+    		const observer = new ResizeObserver(updateGeometry);
+    		observer.observe(frame);
+    		observer.observe(center);
+    		observer.observe(element);
+    		window.addEventListener("resize", updateGeometry);
+    		return () => {
+    			observer.disconnect();
+    			window.removeEventListener("resize", updateGeometry);
+    			center.style.marginRight = original.marginRight;
+    			center.style.marginBottom = original.marginBottom;
+    			center.removeAttribute("data-fat-independent-push");
+    			centerRef.current = null;
+    			element.style.left = "";
+    			element.style.right = "";
+    		};
+    	}, [panel?.target]);
+    	if (!panel) return null;
+    	const open = (target) => moveIndependentSidebar(target);
+    	const close = () => updateIndependentSidebar(void 0);
+    	const activeTab = panel.tabs.find((tab) => tab.id === panel.activeTab);
+    	const title = activeTab?.title ?? "侧栏";
+    	const addTab = (kind) => {
+    		openIndependentSidebarTab(panel.target, {
+    			kind,
+    			title: kind === "files" ? "文件管理" : "终端"
+    		});
+    		setShowAddMenu(false);
+    	};
+    	const currentSize = panel.target === "right" ? size.right : size.bottom;
+    	const resizeStart = (event) => {
+    		event.preventDefault();
+    		const element = panelRef.current;
+    		if (!element) return;
+    		event.currentTarget.setPointerCapture(event.pointerId);
+    		element.setAttribute("data-fat-independent-dragging", "");
+    		centerRef.current?.setAttribute("data-fat-independent-dragging", "");
+    		dragRef.current = {
+    			pointerId: event.pointerId,
+    			target: panel.target,
+    			origin: panel.target === "right" ? event.clientX : event.clientY,
+    			size: panel.target === "right" ? element.getBoundingClientRect().width : element.getBoundingClientRect().height,
+    			value: currentSize
+    		};
+    	};
+    	const resizeMove = (event) => {
+    		const drag = dragRef.current;
+    		const element = panelRef.current;
+    		if (!drag || drag.pointerId !== event.pointerId || !element) return;
+    		const delta = drag.target === "right" ? drag.origin - event.clientX : drag.origin - event.clientY;
+    		const maximum = drag.target === "right" ? window.innerWidth * .72 : window.innerHeight * .78;
+    		const minimum = Math.min(drag.target === "right" ? 260 : 180, maximum);
+    		const value = Math.max(minimum, Math.min(maximum, drag.size + delta));
+    		drag.value = value;
+    		if (drag.target === "right") {
+    			element.style.width = `${value}px`;
+    			if (centerRef.current) centerRef.current.style.marginRight = `${value}px`;
+    		} else {
+    			element.style.height = `${value}px`;
+    			if (centerRef.current) centerRef.current.style.marginBottom = `${value}px`;
+    		}
+    	};
+    	const resizeEnd = (event) => {
+    		const drag = dragRef.current;
+    		if (!drag || drag.pointerId !== event.pointerId) return;
+    		dragRef.current = null;
+    		panelRef.current?.removeAttribute("data-fat-independent-dragging");
+    		centerRef.current?.removeAttribute("data-fat-independent-dragging");
+    		const next = {
+    			...size,
+    			[drag.target]: Math.round(drag.value)
+    		};
+    		setSize(next);
+    		storeIndependentSidebarSize(next);
+    		if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    	};
+    	const adjustSize = (delta) => {
+    		const target = panel.target;
+    		const maximum = target === "right" ? window.innerWidth * .72 : window.innerHeight * .78;
+    		const minimum = Math.min(target === "right" ? 260 : 180, maximum);
+    		const next = {
+    			...size,
+    			[target]: Math.max(minimum, Math.min(maximum, size[target] + delta))
+    		};
+    		setSize(next);
+    		storeIndependentSidebarSize(next);
+    	};
+    	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("aside", {
+    		ref: panelRef,
+    		className: `fat-independent-sidebar fat-independent-sidebar-${panel.target}`,
+    		"aria-label": `${title}侧栏`,
+    		style: panel.target === "right" ? { width: `${size.right}px` } : { height: `${size.bottom}px` },
+    		children: [
+    			/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    				className: `fat-independent-sidebar-splitter fat-independent-sidebar-splitter-${panel.target}`,
+    				role: "separator",
+    				"aria-orientation": panel.target === "right" ? "vertical" : "horizontal",
+    				"aria-label": panel.target === "right" ? "调整侧栏宽度" : "调整侧栏高度",
+    				"aria-valuenow": Math.round(currentSize),
+    				tabIndex: 0,
+    				onPointerDown: resizeStart,
+    				onPointerMove: resizeMove,
+    				onPointerUp: resizeEnd,
+    				onPointerCancel: resizeEnd,
+    				onLostPointerCapture: resizeEnd,
+    				onKeyDown: (event) => {
+    					if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    						event.preventDefault();
+    						adjustSize(16);
+    					}
+    					if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    						event.preventDefault();
+    						adjustSize(-16);
+    					}
+    				}
+    			}),
+    			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("header", {
+    				className: "fat-independent-sidebar-header",
+    				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    					className: "fat-independent-sidebar-tabbar",
+    					children: [
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+    							className: "fat-independent-sidebar-tabs",
+    							role: "tablist",
+    							"aria-label": "侧栏页面",
+    							children: panel.tabs.map((tab) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    								className: "fat-independent-sidebar-tab",
+    								draggable: true,
+    								onDragStart: (event) => {
+    									tabDragRef.current = tab.id;
+    									event.dataTransfer.effectAllowed = "move";
+    									event.dataTransfer.setData("text/plain", tab.id);
+    								},
+    								onDragOver: (event) => event.preventDefault(),
+    								onDrop: (event) => {
+    									event.preventDefault();
+    									const moving = tabDragRef.current;
+    									if (moving) reorderIndependentSidebarTab(moving, tab.id);
+    									tabDragRef.current = null;
+    								},
+    								onDragEnd: () => {
+    									tabDragRef.current = null;
+    								},
+    								children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    									type: "button",
+    									role: "tab",
+    									"aria-selected": panel.activeTab === tab.id,
+    									onClick: () => activateIndependentSidebarTab(tab.id),
+    									title: tab.title,
+    									children: tab.title
+    								}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    									type: "button",
+    									className: "fat-independent-sidebar-tab-close",
+    									"aria-label": `关闭 ${tab.title}`,
+    									title: `关闭 ${tab.title}`,
+    									onClick: () => closeIndependentSidebarTab(tab.id),
+    									children: "×"
+    								})]
+    							}, tab.id))
+    						}),
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
+    							className: "fat-independent-sidebar-add",
+    							"aria-label": "添加侧栏标签",
+    							title: "添加侧栏标签",
+    							"aria-expanded": showAddMenu,
+    							onClick: () => setShowAddMenu((value) => !value),
+    							children: "+"
+    						}),
+    						showAddMenu && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    							className: "fat-independent-sidebar-add-menu",
+    							role: "menu",
+    							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    								type: "button",
+    								role: "menuitem",
+    								onClick: () => addTab("files"),
+    								children: "文件管理"
+    							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    								type: "button",
+    								role: "menuitem",
+    								onClick: () => addTab("terminal"),
+    								children: "终端"
+    							})]
+    						})
+    					]
+    				}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    					className: "fat-independent-sidebar-actions",
+    					children: [
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
+    							"aria-label": "打开右侧栏",
+    							title: "打开右侧栏",
+    							"aria-pressed": panel.target === "right",
+    							onClick: () => open("right"),
+    							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, {
+    								kind: "sidebar-right",
+    								size: 16
+    							})
+    						}),
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
+    							"aria-label": "打开底部栏",
+    							title: "打开底部栏",
+    							"aria-pressed": panel.target === "bottom",
+    							onClick: () => open("bottom"),
+    							children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(ExplorerGlyph, {
+    								kind: "sidebar-bottom",
+    								size: 16
+    							})
+    						}),
+    						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
+    							type: "button",
+    							"aria-label": "关闭侧栏",
+    							title: "关闭侧栏",
+    							onClick: close,
+    							children: "×"
+    						})
+    					]
+    				})]
+    			}),
+    			/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+    				className: "fat-independent-sidebar-content",
+    				children: [
+    					!activeTab && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(AddSidebarTabPage, { onAdd: (kind) => openIndependentSidebarTab(panel.target, {
+    						kind,
+    						title: kind === "files" ? "文件管理" : "终端"
+    					}) }),
+    					activeTab?.kind === "files" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FileManager, {
+    						onOpenRightSidebar: () => open("right"),
+    						onOpenBottomSidebar: () => open("bottom"),
+    						onPreviewFile: (file) => openIndependentSidebarTab(panel.target, {
+    							kind: "preview",
+    							title: file.name,
+    							path: file.path
+    						})
+    					}),
+    					activeTab?.kind === "terminal" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(TerminalPanel, {
+    						visible: true,
+    						source: "independent-sidebar",
+    						onOpenRightSidebar: () => open("right"),
+    						onOpenBottomSidebar: () => open("bottom")
+    					}),
+    					activeTab?.kind === "preview" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(FilePreviewTab, { file: {
+    						name: activeTab.title,
+    						path: activeTab.path
+    					} })
+    				]
+    			})
+    		]
+    	});
+    }
     const styleText = `
     .fat-explorer{height:100%;min-height:0;overflow:auto;padding:28px clamp(18px,4vw,48px);color:var(--dsw-alias-label-primary);font:inherit}
     .fat-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:18px;border-bottom:1px solid var(--dsw-alias-border-l2)}.fat-toolbar h1{margin:0;font-size:22px;font-weight:650}.fat-toolbar p{max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:6px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px}
     .fat-toolbar-actions{display:flex;align-items:center;gap:8px;flex:none}.fat-toolbar-button,.fat-parent{display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit;font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;transition:background-color .15s,border-color .15s}.fat-toolbar-button:hover:not(:disabled),.fat-parent:hover{border-color:var(--dsw-alias-brand-primary)}.fat-toolbar-button:disabled{opacity:.55;cursor:wait}.fat-file-input{display:none}
      @media(max-width:600px){.fat-toolbar{align-items:flex-start;flex-wrap:wrap}.fat-toolbar>div:first-child{min-width:0;flex:1}.fat-toolbar-actions{width:100%;flex-wrap:wrap}.fat-toolbar-button{flex:1;padding:0 10px}}
-    .fat-explorer .fat-toolbar-actions .fat-toolbar-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:36px;flex:none;padding:6px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;transition:color .15s}.fat-explorer .fat-toolbar-actions .fat-toolbar-button:hover:not(:disabled){color:var(--dsw-alias-label-primary)}.fat-explorer button.fat-parent{flex:none;margin:12px 0 8px;border:0;background:transparent;color:inherit}
+     .fat-explorer .fat-toolbar-actions .fat-toolbar-button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:36px;flex:none;padding:6px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;transition:color .15s}.fat-explorer .fat-toolbar-actions .fat-toolbar-button:hover:not(:disabled){color:var(--dsw-alias-label-primary)}.fat-explorer button.fat-parent{flex:none;margin:12px 0 8px;border:0;background:transparent;color:inherit}
+     .fat-independent-sidebar{position:absolute;z-index:1;display:flex;flex-direction:column;overflow:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);box-shadow:0 8px 32px rgb(0 0 0 / .28);border:1px solid var(--dsw-alias-border-l2);transition:width .18s ease,height .18s ease}.fat-independent-sidebar-right{inset:0 0 0 auto;width:380px;max-width:min(90vw,72vw)}.fat-independent-sidebar-bottom{inset:auto 0 0;height:320px;max-height:78vh}.fat-independent-sidebar-header{height:42px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);font-size:13px}.fat-independent-sidebar-tabs{display:flex;align-items:center;gap:4px;min-width:0}.fat-independent-sidebar-tabs button{height:30px;padding:0 11px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;cursor:pointer}.fat-independent-sidebar-tabs button[aria-selected=true]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}.fat-independent-sidebar-actions{display:flex;align-items:center;gap:4px}.fat-independent-sidebar-actions button{width:30px;height:28px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:18px;cursor:pointer}.fat-independent-sidebar-actions button:hover,.fat-independent-sidebar-actions button[aria-pressed=true]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.fat-independent-sidebar-content{flex:1;min-height:0;overflow:hidden}.fat-independent-sidebar-content>.fat-explorer,.fat-independent-sidebar-content>.fat-terminal-page{height:100%;padding-top:14px}.fat-independent-sidebar-splitter{position:absolute;z-index:2;touch-action:none;outline:none}.fat-independent-sidebar-splitter:focus-visible{background:var(--dsw-alias-brand-primary)}.fat-independent-sidebar-splitter-right{left:-4px;top:0;bottom:0;width:8px;cursor:col-resize}.fat-independent-sidebar-splitter-bottom{left:0;right:0;top:-4px;height:8px;cursor:row-resize}.fat-independent-sidebar[data-fat-independent-dragging], [data-fat-independent-push][data-fat-independent-dragging]{transition:none!important}[data-fat-independent-push]{transition:margin-right .18s ease,margin-bottom .18s ease}
+     .fat-independent-sidebar-tabbar{position:relative;display:flex;align-items:center;flex:1;min-width:0}.fat-independent-sidebar-tab{display:flex;align-items:center;min-width:0;max-width:200px;height:30px;border-radius:6px;background:var(--dsw-alias-bg-layer-1)}.fat-independent-sidebar-tab>[role=tab]{height:30px;min-width:0;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 9px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}.fat-independent-sidebar-tab>[role=tab][aria-selected=true]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}.fat-independent-sidebar-tabs .fat-independent-sidebar-tab-close{width:22px;height:26px;flex:none;padding:0;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}.fat-independent-sidebar-tab-close:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+     .fat-independent-sidebar-tabs{position:relative;flex:1}.fat-independent-sidebar-tabs .fat-independent-sidebar-tab-close{width:22px;height:26px;flex:none;padding:0;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}.fat-independent-sidebar-tabs .fat-independent-sidebar-tab-close:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.fat-independent-sidebar-add{width:28px;height:28px;flex:none;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:18px;cursor:pointer}.fat-independent-sidebar-add:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.fat-independent-sidebar-add-menu{position:absolute;z-index:4;top:34px;left:0;display:grid;min-width:140px;padding:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgb(0 0 0 / .2)}.fat-independent-sidebar-add-menu button{height:32px;padding:0 10px;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;font:inherit;font-size:12px;cursor:pointer}.fat-independent-sidebar-add-menu button:hover{background:var(--dsw-alias-bg-layer-2)}
+     .fat-preview-state{height:100%;display:grid;place-content:center;gap:12px;padding:24px;color:var(--dsw-alias-label-secondary);text-align:center}.fat-preview-state a{color:var(--dsw-alias-brand-primary)}.fat-preview-text{height:100%;overflow:auto;margin:0;padding:18px 20px;color:var(--dsw-alias-label-primary);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}.fat-preview-media{height:100%;display:grid;place-items:center;overflow:auto;padding:12px}.fat-preview-media img,.fat-preview-media video{max-width:100%;max-height:100%;object-fit:contain}.fat-preview-media audio{width:min(100%,480px)}.fat-preview-frame{width:100%;height:100%;border:0;background:white}
+     .fat-sidebar-add-page{height:100%;min-height:0;display:grid;place-items:center;overflow:auto;padding:24px;color:var(--dsw-alias-label-primary)}.fat-sidebar-add-content{max-width:420px;text-align:center}.fat-sidebar-add-content>svg{color:var(--dsw-alias-label-tertiary)}.fat-sidebar-add-content h2{margin:14px 0 6px;font-size:16px;font-weight:600}.fat-sidebar-add-content p{margin:0 0 18px;color:var(--dsw-alias-label-tertiary);font-size:12px}.fat-sidebar-add-content>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.fat-sidebar-add-content button{min-height:64px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}.fat-sidebar-add-content button:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+      @media(prefers-reduced-motion:reduce){.fat-independent-sidebar,[data-fat-independent-push]{transition:none}}
     .fat-parent{margin:16px 0 8px}.fat-list{list-style:none;margin:0;padding:0}.fat-list li{display:flex;align-items:center;min-height:42px;border-bottom:1px solid var(--dsw-alias-border-l1)}.fat-list li.fat-hidden{opacity:.46}.fat-entry{display:flex;align-items:center;gap:10px;flex:1;min-width:0;padding:8px 6px;color:inherit;text-decoration:none}.fat-list button.fat-entry{border:0;background:none;text-align:left;font:inherit;cursor:pointer}.fat-list button.fat-entry:hover{background:var(--dsw-alias-bg-layer-2)}.fat-entry>span:nth-child(2){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fat-entry small{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px}.fat-download{margin:0 8px;padding:5px 9px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}.fat-download:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}.fat-download:disabled{opacity:.55;cursor:wait}.fat-empty,.fat-muted,.fat-explorer footer{color:var(--dsw-alias-label-tertiary);font-size:13px}.fat-explorer footer{margin-top:24px}.fat-error{color:#ff7d7d}.fat-terminal-page{height:100%;min-height:0;display:flex;flex-direction:column;background:#111318;color:#e6e8ed;font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.fat-terminal-page:fullscreen{width:100vw;height:100vh}.fat-terminal-bar{height:42px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid #292d36;color:#aeb4c0}.fat-terminal-mark{font-weight:700;color:#74a7ff}.fat-terminal-status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fat-terminal-screen{flex:1;min-height:0;padding:8px}.fat-terminal-screen .xterm{height:100%}.fat-terminal-controls{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}.fat-terminal-controls button{min-width:30px;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 7px;border:1px solid #343a46;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}.fat-terminal-controls button:hover:not(:disabled){background:#292d36;color:#fff}.fat-terminal-controls button:disabled{opacity:.4;cursor:default}.fat-terminal-controls>span{min-width:28px;text-align:center;font-size:11px}.fat-terminal-bar .fat-error{font-size:12px}.fat-terminal-page:fullscreen .fat-terminal-controls{margin-left:0}
     .fat-terminal-screen .xterm{ text-spacing-trim:space-all }
     `;
@@ -11008,8 +11733,29 @@ window.__ModuleLoader__.load({
     	}, ({ size }) => descriptor.icon(size)));
     	inject("main", () => ctx.slots.register({
     		name: "main",
-    		key: descriptor.id
+    		key: descriptor.id,
+    		inject: () => {
+    			return {
+    				onOpenRightSidebar: () => openIndependentSidebar("right"),
+    				onOpenBottomSidebar: () => openIndependentSidebar("bottom"),
+    				onPreviewFile: (file) => openIndependentSidebarTab("right", {
+    					kind: "preview",
+    					title: file.name,
+    					path: file.path
+    				})
+    			};
+    		}
     	}, descriptor.component));
+    }
+    function registerIndependentSidebar(ctx) {
+    	try {
+    		ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+    			name: "shell.overlay",
+    			id: "file-and-terminal.independent-sidebar"
+    		}, IndependentSidebarPanel));
+    	} catch (error) {
+    		warnRegistration("independent sidebar overlay", error);
+    	}
     }
     function apply(ctx) {
     	try {
@@ -11038,6 +11784,7 @@ window.__ModuleLoader__.load({
     		component: TerminalPanel
     	}];
     	for (const descriptor of modules) registerFallbackPanel(ctx, descriptor);
+    	registerIndependentSidebar(ctx);
     	try {
     		ctx.inject(["betterSidebar"], (betterCtx) => {
     			try {
